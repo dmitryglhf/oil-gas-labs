@@ -1,0 +1,9 @@
+[project]
+name = "oil-gas-labs"
+version = "0.1.0"
+description = "Lab Works for Oil&Gas Industry Course"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "notebook>=7.5.2",
+]
