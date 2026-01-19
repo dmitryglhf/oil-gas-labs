@@ -1,4 +1,4 @@
-## Lab 1: COSTA production profile clustering
+## Task 0: COSTA production profile clustering
 
 Sync with uv:
 
