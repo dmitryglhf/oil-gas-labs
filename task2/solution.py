@@ -371,10 +371,10 @@ def _():
 
 
 @app.cell
-def _(ROOT_DIR, pd, user_name, valid_predictions):
+def _(Path, pd, valid_predictions):
     # Save predictions
-    submission = pd.Series(valid_predictions, name=f"{user_name}_prediction")
-    output_path = ROOT_DIR / "task2" / f"{user_name}_prediction.csv"
+    submission = pd.Series(valid_predictions, name="prediction")
+    output_path = Path(__file__).resolve().parent / "pred.csv"
     submission.to_csv(output_path, index=False)
     print(f"Predictions saved to {output_path}")
     submission.head(20)

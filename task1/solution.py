@@ -525,7 +525,7 @@ def _(X_test_final, X_train_final, lgb, y_train_final):
 
 
 @app.cell
-def _(data_path, test_final, test_predictions):
+def _(Path, test_final, test_predictions):
     # Create submission file
     submission = test_final[['cat', 'date']].copy()
     submission['fcst'] = test_predictions
@@ -533,7 +533,7 @@ def _(data_path, test_final, test_predictions):
     # Ensure non-negative predictions
     submission['fcst'] = submission['fcst'].clip(lower=0)
 
-    output_path = data_path / "fcst.csv"
+    output_path = Path(__file__).resolve().parent / "pred.csv"
     submission.to_csv(output_path, index=False)
     print(f"Submission saved to {output_path}")
     submission.head(20)
