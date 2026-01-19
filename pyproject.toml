@@ -5,6 +5,9 @@ description = "Lab Works for Oil&Gas Industry Course"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bottleneck>=1.6.0",
+    "lasio>=0.32",
+    "lightgbm>=4.6.0",
     "marimo>=0.19.4",
     "matplotlib>=3.10.8",
     "notebook>=7.5.2",
