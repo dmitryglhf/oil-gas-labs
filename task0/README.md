@@ -9,5 +9,5 @@ uv sync
 Run notebook with marimo:
 
 ```bash
-marimo edit lab1/solution.py
+marimo edit task0/solution.py
 ```
