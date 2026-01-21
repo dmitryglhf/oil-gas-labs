@@ -3,18 +3,17 @@ name = "oil-gas-labs"
 version = "0.1.0"
 description = "Lab Works for Oil&Gas Industry Course"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "bottleneck>=1.6.0",
     "lasio>=0.32",
-    "lightgbm>=4.6.0",
     "marimo>=0.19.4",
-    "matplotlib>=3.10.8",
     "notebook>=7.5.2",
-    "pandas>=2.3.3",
-    "scikit-learn>=1.8.0",
-    "scipy>=1.17.0",
-    "seaborn>=0.13.2",
     "tqdm>=4.67.1",
     "tslearn>=0.7.0",
+]
+
+[dependency-groups]
+automl = [
+    "autogluon>=1.5.0",
 ]

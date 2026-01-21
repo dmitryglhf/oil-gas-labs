@@ -23,18 +23,7 @@ def _():
 
     # Resolve root directory
     ROOT_DIR = Path(__file__).resolve().parent.parent
-    return (
-        MinMaxScaler,
-        Path,
-        ROOT_DIR,
-        bn,
-        lgb,
-        mean_absolute_error,
-        np,
-        pd,
-        plt,
-        reduce,
-    )
+    return Path, ROOT_DIR, bn, np, pd, reduce
 
 
 @app.cell
@@ -44,7 +33,7 @@ def _(ROOT_DIR, pd):
     train = pd.read_csv(data_path / "train.csv", parse_dates=["date"])
     test = pd.read_csv(data_path / "test.csv", parse_dates=["date"])
     coords = pd.read_csv(data_path / "coords.csv")
-    return coords, data_path, test, train
+    return coords, test, train
 
 
 @app.cell
@@ -75,7 +64,7 @@ def _(data, pd):
     new_index = data.index.append(future_dates)
     data_extended = data.reindex(new_index)
     print(f"Extended data shape: {data_extended.shape}")
-    return HORIZON, data_extended, future_dates, max_date, new_index
+    return (data_extended,)
 
 
 @app.cell
@@ -177,7 +166,6 @@ def _(bottleneck_stats, data_extended):
         rolling_std_12,
         rolling_std_24,
         rolling_std_6,
-        segments_list,
     )
 
 
@@ -204,7 +192,7 @@ def _(
     ]
     for df in rolling_dfs:
         df.fillna(0, inplace=True)
-    return (rolling_dfs,)
+    return
 
 
 @app.cell
@@ -326,7 +314,7 @@ def _(
 
     print(f"Merged data shape: {data_merged.shape}")
     data_merged.head()
-    return data_frames, data_merged
+    return (data_merged,)
 
 
 @app.cell
@@ -342,7 +330,7 @@ def _(data_merged):
 
     print("Time features added")
     data_merged.head()
-    return (min_date,)
+    return
 
 
 @app.cell
@@ -354,28 +342,6 @@ def _(data_merged):
     print(f"Train data shape: {train_data.shape}")
     print(f"Test data shape: {test_data.shape}")
     return test_data, train_data
-
-
-@app.cell
-def _(train_data):
-    # Further split train into training and validation sets
-    tr = train_data[train_data['date'] < '2046-02-01'].copy()
-    val = train_data[train_data['date'] >= '2046-02-01'].copy()
-
-    print(f"Training set shape: {tr.shape}")
-    print(f"Validation set shape: {val.shape}")
-    return tr, val
-
-
-@app.cell
-def _(tr, val):
-    # Filter out injection wells (group == 'I') for production forecasting
-    tr_filtered = tr[tr['group'] != 'I'].copy()
-    val_filtered = val[val['group'] != 'I'].copy()
-
-    print(f"Training set (filtered): {tr_filtered.shape}")
-    print(f"Validation set (filtered): {val_filtered.shape}")
-    return tr_filtered, val_filtered
 
 
 @app.cell
@@ -400,87 +366,24 @@ def _(cols_to_drop, tr_filtered, val_filtered):
     print(f"X_tr shape: {X_tr.shape}")
     print(f"X_val shape: {X_val.shape}")
     print(f"Features: {X_tr.columns.tolist()}")
-    return X_tr, X_val, tr_copy, val_copy, y_tr, y_val
+    return (tr_copy,)
 
 
 @app.cell
-def _(X_tr, X_val, lgb, mean_absolute_error, y_tr, y_val):
-    # Train LightGBM model
-    lgb_params = {
-        'objective': 'regression',
-        'metric': 'mae',
-        'boosting_type': 'gbdt',
-        'num_leaves': 31,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 5,
-        'verbose': -1,
-        'n_estimators': 500,
-        'early_stopping_rounds': 50,
-    }
-
-    model = lgb.LGBMRegressor(**lgb_params)
-    model.fit(
-        X_tr, y_tr,
-        eval_set=[(X_val, y_val)],
-    )
-
-    # Make predictions
-    tr_pred = model.predict(X_tr)
-    val_pred = model.predict(X_val)
-
-    mae_tr = mean_absolute_error(y_tr, tr_pred)
-    mae_val = mean_absolute_error(y_val, val_pred)
-
-    print(f'MAE train: {mae_tr:.2f}')
-    print(f'MAE validation: {mae_val:.2f}')
-    return lgb_params, mae_tr, mae_val, model, tr_pred, val_pred
+def _():
+    from autogluon.tabular import TabularPredictor
+    return (TabularPredictor,)
 
 
 @app.cell
-def _(X_tr, model, pd, plt):
-    # Feature importance
-    feature_importance = pd.DataFrame({
-        'feature': X_tr.columns,
-        'importance': model.feature_importances_
-    }).sort_values('importance', ascending=False)
-
-    plt.figure(figsize=(10, 8))
-    plt.barh(feature_importance['feature'][:20], feature_importance['importance'][:20])
-    plt.xlabel('Importance')
-    plt.title('Top 20 Feature Importances')
-    plt.gca().invert_yaxis()
-    plt.tight_layout()
-    plt.show()
-
-    feature_importance.head(20)
-    return (feature_importance,)
+def _(TabularPredictor, tr_copy):
+    predictor = TabularPredictor(label="oil", eval_metric="mean_absolute_error").fit(tr_copy)
+    return (predictor,)
 
 
 @app.cell
-def _(plt, tr_copy, tr_pred, val_copy, val_pred):
-    # Visualize predictions for some wells
-    tr_copy['pred'] = tr_pred
-    val_copy['pred'] = val_pred
-
-    cats_to_plot = ['hw-3', 'well-175', 'well-180']
-    for cat in cats_to_plot:
-        plt.figure(figsize=(12, 4))
-        plt.title(cat)
-
-        df_tr = tr_copy[tr_copy['cat'] == cat]
-        df_val = val_copy[val_copy['cat'] == cat]
-
-        plt.plot(df_tr['date'], df_tr['oil'], label='train_actual', alpha=0.7)
-        plt.plot(df_tr['date'], df_tr['pred'], label='train_pred', alpha=0.7)
-        plt.plot(df_val['date'], df_val['oil'], label='val_actual', alpha=0.7)
-        plt.plot(df_val['date'], df_val['pred'], label='val_pred', alpha=0.7)
-
-        plt.legend()
-        plt.grid(ls='--')
-        plt.show()
-    return cats_to_plot, df_tr, df_val
+def _():
+    return
 
 
 @app.cell
@@ -496,32 +399,13 @@ def _(cols_to_drop, test_data, train_data):
 
     print(f"Final training shape: {X_train_final.shape}")
     print(f"Final test shape: {X_test_final.shape}")
-    return X_test_final, X_train_final, test_final, train_final, y_train_final
+    return X_test_final, test_final
 
 
 @app.cell
-def _(X_test_final, X_train_final, lgb, y_train_final):
-    # Train final model on all training data
-    final_lgb_params = {
-        'objective': 'regression',
-        'metric': 'mae',
-        'boosting_type': 'gbdt',
-        'num_leaves': 31,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 5,
-        'verbose': -1,
-        'n_estimators': 300,
-    }
-
-    final_model = lgb.LGBMRegressor(**final_lgb_params)
-    final_model.fit(X_train_final, y_train_final)
-
-    # Make predictions on test data
-    test_predictions = final_model.predict(X_test_final)
-    print(f"Predictions generated: {len(test_predictions)}")
-    return final_lgb_params, final_model, test_predictions
+def _(X_test_final, predictor):
+    y_pred = predictor.predict(X_test_final)
+    return
 
 
 @app.cell
@@ -551,7 +435,7 @@ def _(submission):
 @app.cell
 def _():
     import marimo as mo
-    return (mo,)
+    return
 
 
 if __name__ == "__main__":

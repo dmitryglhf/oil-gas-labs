@@ -24,11 +24,9 @@ def _():
     # Resolve root directory
     ROOT_DIR = Path(__file__).resolve().parent.parent
     return (
-        GradientBoostingClassifier,
         Path,
         ROOT_DIR,
         RandomForestClassifier,
-        StandardScaler,
         accuracy_score,
         classification_report,
         f1_score,
@@ -37,7 +35,6 @@ def _():
         np,
         pd,
         rd,
-        sns,
         tqdm,
     )
 
@@ -61,7 +58,7 @@ def _(ROOT_DIR, lasio, pd, tqdm):
     train_data = pd.concat(dfs, ignore_index=True)
     train_data.columns = ["DEPT", "SP", "GR", "DT", "DENS", "LITHO", "Well"]
     print(f"Loaded {len(train_data)} samples from {train_data['Well'].nunique()} wells")
-    return data_path, dfs, train_data, train_test_path
+    return data_path, train_data
 
 
 @app.cell
@@ -143,7 +140,7 @@ def _(df, rd):
 
     print(f"Train wells: {len(train_wells)}, Test wells: {len(all_wells) - len(train_wells)}")
     print(f"Train samples: {len(train_set)}, Test samples: {len(test_set)}")
-    return all_wells, test_set, train_set, train_wells
+    return test_set, train_set
 
 
 @app.cell
@@ -158,7 +155,7 @@ def _():
         'DEPT_norm', 'GR_log', 'DT_log'
     ]
     feature_cols = base_features + engineered_features
-    return base_features, engineered_features, feature_cols
+    return (feature_cols,)
 
 
 @app.cell
@@ -176,132 +173,269 @@ def _(feature_cols, test_set, train_set):
 
 
 @app.cell
-def _(X_test, X_train, accuracy_score, f1_score, lgb, y_test, y_train):
-    # Train LightGBM model
-    lgb_params = {
-        'objective': 'binary',
-        'metric': 'binary_logloss',
-        'boosting_type': 'gbdt',
-        'num_leaves': 31,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 5,
-        'verbose': -1,
-        'n_estimators': 300,
-        'class_weight': 'balanced',
-    }
+def _():
+    # Additional imports for hyperparameter tuning
+    import optuna
+    from optuna.samplers import TPESampler
+    import xgboost as xgb
+    from catboost import CatBoostClassifier
+    from sklearn.model_selection import GroupKFold
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    return CatBoostClassifier, GroupKFold, TPESampler, optuna, xgb
 
-    lgb_model = lgb.LGBMClassifier(**lgb_params)
-    lgb_model.fit(X_train, y_train)
 
-    lgb_pred = lgb_model.predict(X_test)
-    lgb_f1 = f1_score(y_test, lgb_pred)
-    lgb_acc = accuracy_score(y_test, lgb_pred)
+@app.cell
+def _(CatBoostClassifier, lgb, np, xgb):
+    # Objective functions for Optuna (Classification)
+    def lgb_clf_objective(trial, X, y, groups, cv):
+        params = {
+            'objective': 'binary',
+            'metric': 'binary_logloss',
+            'verbosity': -1,
+            'num_leaves': trial.suggest_int('num_leaves', 15, 63),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+            'n_estimators': trial.suggest_int('n_estimators', 100, 300),
+            'min_child_samples': trial.suggest_int('min_child_samples', 5, 30),
+            'class_weight': trial.suggest_categorical('class_weight', ['balanced', None]),
+        }
+        model = lgb.LGBMClassifier(**params)
+        # Manual GroupKFold cross-validation with F1 scoring
+        scores = []
+        for train_idx, val_idx in cv.split(X, y, groups):
+            X_train_cv, X_val_cv = X.iloc[train_idx], X.iloc[val_idx]
+            y_train_cv, y_val_cv = y.iloc[train_idx], y.iloc[val_idx]
+            model.fit(X_train_cv, y_train_cv)
+            y_pred = model.predict(X_val_cv)
+            from sklearn.metrics import f1_score
+            scores.append(f1_score(y_val_cv, y_pred))
+        return np.mean(scores)
 
-    print(f"LightGBM - F1: {lgb_f1:.4f}, Accuracy: {lgb_acc:.4f}")
-    return lgb_acc, lgb_f1, lgb_model, lgb_params, lgb_pred
+    def xgb_clf_objective(trial, X, y, groups, cv):
+        params = {
+            'objective': 'binary:logistic',
+            'max_depth': trial.suggest_int('max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+            'n_estimators': trial.suggest_int('n_estimators', 100, 300),
+            'scale_pos_weight': trial.suggest_float('scale_pos_weight', 1, 5),
+            'verbosity': 0,
+        }
+        model = xgb.XGBClassifier(**params)
+        scores = []
+        for train_idx, val_idx in cv.split(X, y, groups):
+            X_train_cv, X_val_cv = X.iloc[train_idx], X.iloc[val_idx]
+            y_train_cv, y_val_cv = y.iloc[train_idx], y.iloc[val_idx]
+            model.fit(X_train_cv, y_train_cv)
+            y_pred = model.predict(X_val_cv)
+            from sklearn.metrics import f1_score
+            scores.append(f1_score(y_val_cv, y_pred))
+        return np.mean(scores)
+
+    def catboost_clf_objective(trial, X, y, groups, cv):
+        params = {
+            'loss_function': 'Logloss',
+            'depth': trial.suggest_int('depth', 4, 8),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+            'iterations': trial.suggest_int('iterations', 100, 300),
+            'auto_class_weights': trial.suggest_categorical('auto_class_weights', ['Balanced', 'SqrtBalanced']),
+            'verbose': False,
+        }
+        model = CatBoostClassifier(**params)
+        scores = []
+        for train_idx, val_idx in cv.split(X, y, groups):
+            X_train_cv, X_val_cv = X.iloc[train_idx], X.iloc[val_idx]
+            y_train_cv, y_val_cv = y.iloc[train_idx], y.iloc[val_idx]
+            model.fit(X_train_cv, y_train_cv)
+            y_pred = model.predict(X_val_cv)
+            from sklearn.metrics import f1_score
+            scores.append(f1_score(y_val_cv, y_pred))
+        return np.mean(scores)
+
+    return catboost_clf_objective, lgb_clf_objective, xgb_clf_objective
 
 
 @app.cell
 def _(
-    RandomForestClassifier,
-    X_test,
-    X_train,
-    accuracy_score,
-    f1_score,
-    y_test,
-    y_train,
+    CatBoostClassifier,
+    GroupKFold,
+    TPESampler,
+    catboost_clf_objective,
+    lgb,
+    lgb_clf_objective,
+    optuna,
+    pd,
+    xgb,
+    xgb_clf_objective,
 ):
-    # Train Random Forest model
-    rf_model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        class_weight='balanced',
-        random_state=42,
-        n_jobs=-1
-    )
-    rf_model.fit(X_train, y_train)
+    # Function to tune and compare classification models
+    def tune_and_compare_clf(X, y, groups, n_trials=30):
+        cv = GroupKFold(n_splits=3)
+        results = {}
 
-    rf_pred = rf_model.predict(X_test)
-    rf_f1 = f1_score(y_test, rf_pred)
-    rf_acc = accuracy_score(y_test, rf_pred)
+        print("=" * 60)
+        print("Starting hyperparameter tuning with Optuna (30 trials per model)")
+        print("Using GroupKFold with grouping by Well")
+        print("=" * 60)
 
-    print(f"Random Forest - F1: {rf_f1:.4f}, Accuracy: {rf_acc:.4f}")
-    return rf_acc, rf_f1, rf_model, rf_pred
+        # LightGBM
+        print("\n[1/3] Tuning LightGBM...")
+        study_lgb = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
+        study_lgb.optimize(lambda t: lgb_clf_objective(t, X, y, groups, cv), n_trials=n_trials, show_progress_bar=True)
+        results['LightGBM'] = {
+            'f1': study_lgb.best_value,
+            'params': study_lgb.best_params,
+            'model_class': lgb.LGBMClassifier
+        }
+        print(f"  Best F1: {study_lgb.best_value:.4f}")
+
+        # XGBoost
+        print("\n[2/3] Tuning XGBoost...")
+        study_xgb = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
+        study_xgb.optimize(lambda t: xgb_clf_objective(t, X, y, groups, cv), n_trials=n_trials, show_progress_bar=True)
+        results['XGBoost'] = {
+            'f1': study_xgb.best_value,
+            'params': study_xgb.best_params,
+            'model_class': xgb.XGBClassifier
+        }
+        print(f"  Best F1: {study_xgb.best_value:.4f}")
+
+        # CatBoost
+        print("\n[3/3] Tuning CatBoost...")
+        study_catboost = optuna.create_study(direction='maximize', sampler=TPESampler(seed=42))
+        study_catboost.optimize(lambda t: catboost_clf_objective(t, X, y, groups, cv), n_trials=n_trials, show_progress_bar=True)
+        results['CatBoost'] = {
+            'f1': study_catboost.best_value,
+            'params': study_catboost.best_params,
+            'model_class': CatBoostClassifier
+        }
+        print(f"  Best F1: {study_catboost.best_value:.4f}")
+
+        # Create comparison dataframe
+        comparison_df = pd.DataFrame({
+            'Model': list(results.keys()),
+            'F1 Score': [results[m]['f1'] for m in results],
+            'Best Params': [str(results[m]['params']) for m in results]
+        }).sort_values('F1 Score', ascending=False)
+
+        print("\n" + "=" * 60)
+        print("Model Comparison Results (sorted by F1 Score)")
+        print("=" * 60)
+        print(comparison_df.to_string(index=False))
+
+        return results
+
+    return (tune_and_compare_clf,)
 
 
 @app.cell
-def _(X_train, lgb_model, pd, plt):
+def _(X_train, train_set, tune_and_compare_clf, y_train):
+    # Run hyperparameter tuning and model comparison
+    groups_train = train_set['Well']
+    comparison_results = tune_and_compare_clf(X_train, y_train, groups_train, n_trials=30)
+    return comparison_results, groups_train
+
+
+@app.cell
+def _(CatBoostClassifier, X_test, X_train, accuracy_score, comparison_results, f1_score, lgb, xgb, y_test, y_train):
+    # Train the best model with optimal hyperparameters
+    best_model_name = max(comparison_results, key=lambda k: comparison_results[k]['f1'])
+    best_params = comparison_results[best_model_name]['params']
+
+    print(f"\nBest model: {best_model_name}")
+    print(f"Best parameters: {best_params}")
+
+    # Create and train the best model
+    if best_model_name == 'LightGBM':
+        best_model = lgb.LGBMClassifier(
+            objective='binary',
+            metric='binary_logloss',
+            verbosity=-1,
+            **best_params
+        )
+    elif best_model_name == 'XGBoost':
+        best_model = xgb.XGBClassifier(
+            objective='binary:logistic',
+            verbosity=0,
+            **best_params
+        )
+    else:  # CatBoost
+        best_model = CatBoostClassifier(
+            loss_function='Logloss',
+            verbose=False,
+            **best_params
+        )
+
+    best_model.fit(X_train, y_train)
+
+    # Make predictions
+    best_pred = best_model.predict(X_test)
+    best_f1 = f1_score(y_test, best_pred)
+    best_acc = accuracy_score(y_test, best_pred)
+
+    print(f'\n{best_model_name} (tuned) - F1: {best_f1:.4f}, Accuracy: {best_acc:.4f}')
+    return best_acc, best_f1, best_model, best_model_name, best_params, best_pred
+
+
+@app.cell
+def _(X_train, best_model, best_model_name, pd):
     # Feature importance
     import matplotlib.pyplot as plt
 
     feature_importance = pd.DataFrame({
         'feature': X_train.columns,
-        'importance': lgb_model.feature_importances_
+        'importance': best_model.feature_importances_
     }).sort_values('importance', ascending=False)
 
     plt.figure(figsize=(10, 8))
     plt.barh(feature_importance['feature'][:15], feature_importance['importance'][:15])
     plt.xlabel('Importance')
-    plt.title('Top 15 Feature Importances (LightGBM)')
+    plt.title(f'Top 15 Feature Importances ({best_model_name})')
     plt.gca().invert_yaxis()
     plt.tight_layout()
     plt.show()
 
     feature_importance
-    return feature_importance, plt
-
-
-@app.cell
-def _(classification_report, lgb_pred, rf_pred, y_test):
-    # Detailed classification report
-    print("LightGBM Classification Report:")
-    print(classification_report(y_test, lgb_pred))
-
-    print("\nRandom Forest Classification Report:")
-    print(classification_report(y_test, rf_pred))
     return
 
 
 @app.cell
-def _(lgb_f1, lgb_model, rf_f1, rf_model):
-    # Select best model
-    if lgb_f1 >= rf_f1:
-        best_model = lgb_model
-        best_model_name = "LightGBM"
-    else:
-        best_model = rf_model
-        best_model_name = "Random Forest"
-
-    print(f"Best model: {best_model_name}")
-    return best_model, best_model_name
+def _(best_model_name, best_pred, classification_report, y_test):
+    # Detailed classification report
+    print(f"{best_model_name} Classification Report:")
+    print(classification_report(y_test, best_pred))
+    return
 
 
 @app.cell
-def _(df, feature_cols, lgb, y_train):
-    # Retrain on all data for final prediction
+def _(CatBoostClassifier, best_model_name, best_params, df, feature_cols, lgb, xgb):
+    # Retrain on all data for final prediction with best hyperparameters
     X_all = df[feature_cols]
     y_all = df["LITHO"]
 
-    final_model = lgb.LGBMClassifier(
-        objective='binary',
-        metric='binary_logloss',
-        boosting_type='gbdt',
-        num_leaves=31,
-        learning_rate=0.05,
-        feature_fraction=0.8,
-        bagging_fraction=0.8,
-        bagging_freq=5,
-        verbose=-1,
-        n_estimators=300,
-        class_weight='balanced',
-    )
+    print(f"\nTraining final {best_model_name} model on all data...")
+
+    if best_model_name == 'LightGBM':
+        final_model = lgb.LGBMClassifier(
+            objective='binary',
+            metric='binary_logloss',
+            verbosity=-1,
+            **best_params
+        )
+    elif best_model_name == 'XGBoost':
+        final_model = xgb.XGBClassifier(
+            objective='binary:logistic',
+            verbosity=0,
+            **best_params
+        )
+    else:  # CatBoost
+        final_model = CatBoostClassifier(
+            loss_function='Logloss',
+            verbose=False,
+            **best_params
+        )
+
     final_model.fit(X_all, y_all)
     print("Final model trained on all data")
-    return X_all, final_model, y_all
+    return (final_model,)
 
 
 @app.cell
@@ -321,17 +455,17 @@ def _(data_path, np, pd):
     val_df['GR_DT_product'] = val_df['GR'] * val_df['DT']
 
     # Normalized features within each well
-    for col in ['SP', 'GR', 'DT', 'DENS']:
-        val_df[f'{col}_norm'] = val_df.groupby('Well')[col].transform(
+    for c in ['SP', 'GR', 'DT', 'DENS']:
+        val_df[f'{c}_norm'] = val_df.groupby('Well')[c].transform(
             lambda x: (x - x.mean()) / (x.std() + 1e-6)
         )
 
     # Rolling statistics per well
-    for col in ['SP', 'GR', 'DT', 'DENS']:
-        val_df[f'{col}_roll_mean'] = val_df.groupby('Well')[col].transform(
+    for c in ['SP', 'GR', 'DT', 'DENS']:
+        val_df[f'{c}_roll_mean'] = val_df.groupby('Well')[c].transform(
             lambda x: x.rolling(window=3, min_periods=1, center=True).mean()
         )
-        val_df[f'{col}_roll_std'] = val_df.groupby('Well')[col].transform(
+        val_df[f'{c}_roll_std'] = val_df.groupby('Well')[c].transform(
             lambda x: x.rolling(window=3, min_periods=1, center=True).std()
         )
 
@@ -348,7 +482,7 @@ def _(data_path, np, pd):
 
     print(f"Validation features shape: {val_df.shape}")
     val_df.head()
-    return val_df, validation_data
+    return (val_df,)
 
 
 @app.cell
@@ -360,14 +494,14 @@ def _(feature_cols, final_model, pd, val_df):
     print(f"Predictions made: {len(valid_predictions)}")
     print(f"Predicted class distribution:")
     print(pd.Series(valid_predictions).value_counts())
-    return X_valid, valid_predictions
+    return (valid_predictions,)
 
 
 @app.cell
 def _():
     # Set user name for submission
     user_name = "Solution"
-    return (user_name,)
+    return
 
 
 @app.cell
@@ -378,13 +512,13 @@ def _(Path, pd, valid_predictions):
     submission.to_csv(output_path, index=False)
     print(f"Predictions saved to {output_path}")
     submission.head(20)
-    return (submission,)
+    return
 
 
 @app.cell
 def _():
     import marimo as mo
-    return (mo,)
+    return
 
 
 if __name__ == "__main__":
