@@ -12,7 +12,7 @@ def _():
     import bottleneck as bn
     from functools import reduce
     from sklearn.metrics import mean_absolute_error
-    from sklearn.linear_model import BayesianRidge as Ridge
+    from sklearn.linear_model import RANSACRegressor as Ridge
     from sklearn.preprocessing import MinMaxScaler
     import matplotlib.pyplot as plt
     import missingno as msno
