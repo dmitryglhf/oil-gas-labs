@@ -12,10 +12,11 @@ def _():
     import bottleneck as bn
     from functools import reduce
     from sklearn.metrics import mean_absolute_error
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import BayesianRidge as Ridge
     from sklearn.preprocessing import MinMaxScaler
     import matplotlib.pyplot as plt
     import missingno as msno
+    from pathlib import Path
 
     # Increase the number of displayed columns and rows
     pd.set_option("display.max_columns", 300)
@@ -23,6 +24,7 @@ def _():
     np.set_printoptions(suppress=True)
     return (
         MinMaxScaler,
+        Path,
         Ridge,
         bn,
         mean_absolute_error,
@@ -35,12 +37,13 @@ def _():
 
 
 @app.cell
-def _(pd):
+def _(Path, pd):
     # Load the train data
-    path = "data/"
-    train = pd.read_csv(path + "train.csv", parse_dates=["date"])
+    ROOT_DIR = Path(__file__).parent.parent / "example"
+    DATA_DIR = ROOT_DIR /"data"
+    train = pd.read_csv(DATA_DIR / "train.csv", parse_dates=["date"])
     train
-    return path, train
+    return DATA_DIR, train
 
 
 @app.cell
@@ -265,10 +268,10 @@ def _(
 
 
 @app.cell
-def _(path, pd):
+def _(DATA_DIR, pd):
     # Load the test data
     # The test data is loaded from a csv file into a pandas dataframe.
-    test = pd.read_csv(path + "test.csv", parse_dates=["date"])
+    test = pd.read_csv(DATA_DIR / "test.csv", parse_dates=["date"])
     test
     return (test,)
 
@@ -478,14 +481,14 @@ def _(model, test_3, train_3, y_train):
 
 
 @app.cell
-def _(fcst, path, test_):
+def _(DATA_DIR, fcst, test_):
     # Assign the predictions to a new column in the test data
     # The predictions made by the Ridge regression model are assigned to a new column named 'fcst' in the test data.
     test_["fcst"] = fcst
 
     # Save the test data with predictions to a csv file
     # The test data along with the predictions is saved to a csv file for submission.
-    test_.to_csv(path + "fcst.csv", index=False)
+    test_.to_csv(DATA_DIR / "fcst.csv", index=False)
     return
 
 
