@@ -1,4 +1,4 @@
-## Task 0: COSTA production profile clustering
+## Task 0: COSTA
 
 Sync with uv:
 
