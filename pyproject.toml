@@ -9,6 +9,7 @@ dependencies = [
     "lasio>=0.32",
     "marimo>=0.19.4",
     "notebook>=7.5.2",
+    "seaborn>=0.13.2",
     "tqdm>=4.67.1",
     "tslearn>=0.7.0",
 ]
